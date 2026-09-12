@@ -6,12 +6,23 @@ import os
 import re
 import requests
 import sys
+from multidict import CIMultiDict
 from ._version import __version__
 
 
 class BenchmarkConfig(BaseModel):
     base_url: str = Field(..., description="OpenAI compatible endpoint URL")
-    api_key: str = Field(..., description="API Key for the endpoint")
+    api_key: str = Field(..., description="API Key for the endpoint", exclude=True, repr=False)
+    request_headers: Dict[str, str] = Field(
+        default_factory=dict, exclude=True, repr=False,
+        description="Additional endpoint request headers; omitted from serialized config",
+    )
+    temperature: Optional[float] = Field(
+        None, description="Sampling temperature for every completion; omitted when unset",
+    )
+    seed: Optional[int] = Field(
+        None, description="Sampling seed for every completion; omitted when unset",
+    )
     model: str = Field(..., description="Model name to use for benchmarking")
     served_model_name: str = Field(
         ...,
@@ -114,7 +125,9 @@ class BenchmarkConfig(BaseModel):
         return extra
 
     @staticmethod
-    def _detect_hf_model_from_endpoint(base_url: str, api_key: str) -> Tuple[str, str]:
+    def _detect_hf_model_from_endpoint(
+        base_url: str, api_key: str, request_headers: Optional[Dict[str, str]] = None,
+    ) -> Tuple[str, str]:
         """
         Fetch models from {base_url}/models endpoint and identify HF model name.
 
@@ -124,11 +137,13 @@ class BenchmarkConfig(BaseModel):
         HF_MODEL_PATTERN = re.compile(r"^[^/]+/[^/]+$")
 
         try:
-            headers = (
+            headers = CIMultiDict(
                 {"Authorization": f"Bearer {api_key}"}
                 if api_key and api_key != "EMPTY"
                 else {}
             )
+            for name, value in (request_headers or {}).items():
+                headers[name] = value
             response = requests.get(f"{base_url}/models", headers=headers, timeout=5)
             response.raise_for_status()
             data = response.json()
@@ -221,6 +236,18 @@ class BenchmarkConfig(BaseModel):
         )
         parser.add_argument(
             "--api-key", type=str, default="EMPTY", help="API Key for the endpoint"
+        )
+        parser.add_argument(
+            "--header", action="append", default=[], metavar="NAME:VALUE",
+            help="Additional endpoint header; repeat for multiple headers; last value wins",
+        )
+        parser.add_argument(
+            "--temperature", type=float, default=None,
+            help="Sampling temperature for every completion, including warmup and latency",
+        )
+        parser.add_argument(
+            "--seed", type=int, default=None,
+            help="Sampling seed for every completion; server default when omitted",
         )
         parser.add_argument(
             "--model",
@@ -386,6 +413,18 @@ class BenchmarkConfig(BaseModel):
 
         args = parser.parse_args()
 
+        request_headers = {}
+        for header in args.header:
+            name, separator, value = header.partition(":")
+            name = name.strip(" ").lower()
+            if (
+                not separator
+                or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9a-z-]+", name)
+                or any(ord(char) < 32 and char != "\t" or ord(char) == 127 for char in value)
+            ):
+                parser.error("--header requires a valid NAME:VALUE without control characters")
+            request_headers[name] = value.strip()
+
         if args.no_results_on_fail:
             args.exit_on_first_fail = True
         if args.warmup_runs < 0:
@@ -402,7 +441,7 @@ class BenchmarkConfig(BaseModel):
             print("No model specified, attempting to auto-detect from endpoint...")
             try:
                 hf_model, served_model = BenchmarkConfig._detect_hf_model_from_endpoint(
-                    args.base_url, args.api_key
+                    args.base_url, args.api_key, request_headers
                 )
                 model_to_use = hf_model
                 served_model_name_to_use = (
@@ -423,6 +462,9 @@ class BenchmarkConfig(BaseModel):
         return cls(
             base_url=args.base_url,
             api_key=args.api_key,
+            request_headers=request_headers,
+            temperature=args.temperature,
+            seed=args.seed,
             model=model_to_use,
             served_model_name=served_model_name_to_use,
             tokenizer=args.tokenizer,

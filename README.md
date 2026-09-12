@@ -157,6 +157,9 @@ Generally you don't need to disable prompt caching on the server, as a probabili
 
 -   `--base-url`: OpenAI compatible endpoint URL (Required).
 -   `--api-key`: API Key (Default: "EMPTY").
+-   `--header NAME:VALUE`: Additional endpoint request header. Repeat for multiple headers. Names are case-insensitive; the last value wins. Headers also apply to model discovery and API latency requests, but are not forwarded to HuggingFace or the book URL. Header values and the API key are excluded from serialized configuration and benchmark reports.
+-   `--temperature`: Sampling temperature sent on every completion, including latency, warmup, coherence, context prefill, and decode. Omitted by default to preserve server behavior. When set, overrides a temperature supplied through `--extra-body`.
+-   `--seed`: Sampling seed sent on every completion. Omitted by default. When set, overrides a seed supplied through `--extra-body`. This controls server sampling, not random corpus selection or `--no-cache` noise.
 -   `--model`: Model name to use for benchmarking. If not specified, attempts to auto-detect from the endpoint's `/models` endpoint.
 -   `--served-model-name`: Model name used in API calls (Defaults to --model if not specified). Tries to autodetect from the endpoint's `/models` endpoint (if supported, e.g. vLLM).
 -   `--tokenizer`: HuggingFace tokenizer name or local path (Defaults to model name).
@@ -194,6 +197,33 @@ llama-benchy \
   --tg 1024 \
   --exact-tg
 ```
+
+### Qwen router on port 8085
+
+Use the mandatory router at `http://127.0.0.1:8085/v1` for Qwen benchmarks. Route benchmark completions as P5 idle-only work and supply identifiers for the run and case. This PowerShell example uses the locally installed checkout:
+
+```powershell
+.venv\Scripts\python.exe -m llama_benchy `
+  --base-url http://127.0.0.1:8085/v1 `
+  --model qwen38-27b-64k-ud-q2 `
+  --tokenizer 'H:\AI\Models\sources\Qwen\Qwen3.5-9B' `
+  --header 'X-Qwen-Priority: P5' `
+  --header 'X-Qwen-Idle-Only: true' `
+  --header 'X-Qwen-Source: llama-benchy' `
+  --header 'X-Qwen-Job-Type: benchmark' `
+  --header 'X-Qwen-Benchmark-Family: qwen38_quant_study' `
+  --header 'X-Qwen-Benchmark-Name: Qwen 3.8 27B quant study' `
+  --header 'X-Qwen-Benchmark-Run-Id: <run-id>' `
+  --header 'X-Qwen-Benchmark-Case-Id: <case-id>' `
+  --temperature 0 --seed 42 `
+  --pp 128 --tg 32 --depth 0 --runs 1 --concurrency 1 `
+  --latency-mode generation --exit-on-first-fail `
+  --format json --save-result qwen-router-result.json
+```
+
+Replace `<run-id>` and `<case-id>` before running. The Qwen3.8 GGUF metadata identifies its tokenizer model as `qwen35`, so this example selects the compatible local Qwen3.5 tokenizer without downloading one. Keep temperature and seed fixed across comparison cases. Backends can still differ in determinism, and corpus excerpts remain randomly selected. Router admission and queue time contribute to the measured latency and TTFT. If the router rejects a request, stop and resolve admission before rerunning.
+
+Custom headers can contain credentials. Keep secrets out of identifiers and shared command transcripts. Report metadata does not include request headers.
 
 ### Metrics
 
@@ -383,6 +413,12 @@ the progress stream functionality and reference visualizer integration.
 ## Development
 
 ### Running Integration Tests
+
+The request-control tests run without a server, tokenizer download, or GPU:
+
+```bash
+python -m unittest tests.test_request_controls
+```
 
 This repository includes a mock server and an integration test suite to verify `llama-benchy` logic without needing a real GPU server.
 

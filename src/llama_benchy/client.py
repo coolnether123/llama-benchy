@@ -6,6 +6,7 @@ import asyncio
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
+from multidict import CIMultiDict
 
 _warned_about_fallback = False
 
@@ -39,13 +40,23 @@ class LLMClient:
         model_name: str,
         extra_body: Optional[Dict[str, Any]] = None,
         exact_tg: bool = False,
+        *,
+        request_headers: Optional[Dict[str, str]] = None,
+        temperature: Optional[float] = None, seed: Optional[int] = None,
     ):
         self.base_url = base_url
         self.api_key = api_key
         self.model_name = model_name
         self.extra_body = extra_body or {}
         self.exact_tg = exact_tg
-        self.headers = {"Authorization": f"Bearer {api_key}"}
+        self.headers = CIMultiDict({"Authorization": f"Bearer {api_key}"})
+        for name, value in (request_headers or {}).items():
+            self.headers[name] = value
+        self.completion_options: Dict[str, Any] = {}
+        if temperature is not None:
+            self.completion_options["temperature"] = temperature
+        if seed is not None:
+            self.completion_options["seed"] = seed
 
     def _build_generation_payload(self, messages: List[Dict[str, str]], max_tokens: int, no_cache: bool) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -61,6 +72,7 @@ class LLMClient:
             payload["cache_prompt"] = False
 
         payload.update(self.extra_body)
+        payload.update(self.completion_options)
 
         if self.exact_tg:
             payload["max_tokens"] = max_tokens
@@ -186,6 +198,7 @@ class LLMClient:
                 elif mode == "generation":
                     payload = {
                         "model": self.model_name,
+                        **self.completion_options,
                         "messages": [{"role": "user", "content": "hello"}],
                         "max_tokens": 1,
                         "stream": True
@@ -212,6 +225,7 @@ class LLMClient:
         prompt = "What is the capital of France? Please reply with one word only"
         payload = {
             "model": self.model_name,
+            **self.completion_options,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 100
         }
@@ -250,6 +264,7 @@ class LLMClient:
         # 1. User only
         payload_user = {
             "model": self.model_name,
+            **self.completion_options,
             "messages": [{"role": "user", "content": warmup_text}],
             "max_tokens": 1
         }
@@ -276,6 +291,7 @@ class LLMClient:
                 # 2. Context Only
                 payload_sys_probe = {
                     "model": self.model_name,
+                    **self.completion_options,
                     "messages": [
                         {"role": "system", "content": warmup_text},
                         {"role": "user", "content": CONTEXT_LOAD_USER_MESSAGE}

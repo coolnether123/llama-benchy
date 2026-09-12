@@ -41,6 +41,9 @@ async def main_async():
         config.served_model_name,
         config.extra_body,
         config.exact_tg,
+        request_headers=config.request_headers,
+        temperature=config.temperature,
+        seed=config.seed,
     )
 
     progress = None
